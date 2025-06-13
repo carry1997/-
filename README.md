@@ -1,150 +1,193 @@
-from flask import Flask, render_template, request, redirect, url_for, g
-import sqlite3
 
-app = Flask(_name_)
-DATABASE = 'membership.db'
+from flask import Flask, request, redirect, session, send_from_directory
+import os
 
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-    return db
+app = Flask(__name__)
+app.secret_key = 'secret123'
 
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR)
 
-def init_db():
-    with app.app_context():
-        db = get_db()
-        db.executescript("""
-        CREATE TABLE IF NOT EXISTS members (
-            iid INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            phone TEXT,
-            birthdate TEXT
-        );
-        INSERT OR IGNORE INTO members (username, email, password)
-        VALUES ('admin', 'admin@example.com', 'admin');
-        """)
-        db.commit()
+tickets = {
+    "五月天演唱會": {
+        "搖滾區 A 區": [5000, 5525],
+        "搖滾區 B 區": [5000, 4525],
+        "搖滾區 C 區": [5000, 3880],
+        "看台區": [4000, 1880]
+    },
+    "周杰倫演唱會": {
+        "搖滾區 A 區": [5000, 5525],
+        "搖滾區 B 區": [5000, 4525],
+        "搖滾區 C 區": [5000, 3880],
+        "看台區": [4000, 1880]
+    }
+}
+
+users = {
+    "admin": "admin123"
+}
+
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory(STATIC_DIR, filename)
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    user = session.get('user')
+    html = """<html><head>
+    <meta charset='utf-8'>
+    <style>
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 20px;
+        background: #f2f3f5;
+        color: #333;
+    }
+    .event-card {
+        background: #fff;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 30px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    table {
+        border-collapse: collapse;
+        width: 100%%;
+        margin-top: 15px;
+    }
+    th {
+        background-color: #004085;
+        color: white;
+    }
+    th, td {
+        padding: 12px;
+        border: 1px solid #ccc;
+        text-align: center;
+    }
+    td.price span {
+        background: #dc3545;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: bold;
+    }
+    a.button {
+        background: #007bff;
+        color: white;
+        padding: 6px 14px;
+        text-decoration: none;
+        border-radius: 5px;
+        transition: 0.3s;
+    }
+    a.button:hover {
+        background: #0056b3;
+    }
+    .map {
+        margin-top: 15px;
+        max-width: 100%%;
+        border: 2px solid #aaa;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    </style></head><body>
+    <h1>🎫 演唱會搶票系統</h1>
+    """
+
+    if user:
+        html += "<p>👋 歡迎 " + user + " | <a href='/logout'>登出</a></p>"
+    else:
+        html += "<p><a href='/login'>登入</a> | <a href='/register'>註冊</a></p>"
+
+    for event, zones in tickets.items():
+        html += "<div class='event-card'>"
+        html += "<h2>" + event + "</h2><table><tr><th>區域</th><th>票價</th><th>剩餘票數</th><th>操作</th></tr>"
+        for zone, (count, price) in zones.items():
+            html += "<tr><td>" + zone + "</td><td class='price'><span>" + str(price) + " 元</span></td><td>" + str(count) + "</td><td>"
+            if user:
+                html += "<a class='button' href='/buy?event=" + event + "&zone=" + zone + "'>搶票</a>"
+            else:
+                html += "請先登入"
+            html += "</td></tr>"
+        html += "</table>"
+        html += "<img class='map' src='/static/taipei_dome_map.jpg' alt='大巨蛋座位圖'>"
+        html += "</div>"
+
+    if user == "admin":
+        html += "<p><a class='button' href='/admin'>🎛️ 進入後台</a></p>"
+
+    html += "</body></html>"
+    return html
+
+@app.route('/buy')
+def buy():
+    user = session.get('user')
+    if not user:
+        return redirect('/login')
+
+    event = request.args.get("event")
+    zone = request.args.get("zone")
+
+    if event not in tickets or zone not in tickets[event]:
+        return "<h1>❌ 活動或區域不存在</h1><a href='/'>回首頁</a>"
+
+    if tickets[event][zone][0] > 0:
+        tickets[event][zone][0] -= 1
+        return f"<h1>✅ {user} 成功搶到《{event}》{zone}門票！</h1><a href='/'>回首頁</a>"
+    return f"<h1>❌ 《{event}》{zone} 票已售完！</h1><a href='/'>回首頁</a>"
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form['username']
-        email = request.form['email']
         password = request.form['password']
-        phone = request.form.get('phone')
-        birthdate = request.form.get('birthdate')
+        if username in users:
+            return "<h1>⚠️ 帳號已存在</h1><a href='/register'>重新註冊</a>"
+        users[username] = password
+        return "<h1>✅ 註冊成功</h1><a href='/login'>前往登入</a>"
 
-        if not username or not email or not password:
-            return render_template('error.html', message='請輸入用戶名、電子郵件和密碼')
-
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT * FROM members WHERE username=? OR email=?", (username, email))
-        if cursor.fetchone():
-            return render_template('error.html', message='用戶名或電子郵件已存在')
-
-        cursor.execute("INSERT INTO members (username, email, password, phone, birthdate) VALUES (?, ?, ?, ?, ?)",
-                       (username, email, password, phone, birthdate))
-        db.commit()
-        return redirect(url_for('login'))
-    return render_template('register.html')
+    return """<h1>註冊帳號</h1>
+    <form method="post">
+        帳號：<input name="username"><br>
+        密碼：<input name="password" type="password"><br>
+        <input type="submit" value="註冊">
+    </form>"""
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        email = request.form['email']
+        username = request.form['username']
         password = request.form['password']
+        if username in users and users[username] == password:
+            session['user'] = username
+            return redirect('/')
+        return "<h1>❌ 登入失敗</h1><a href='/login'>重試</a>"
 
-        if not email or not password:
-            return render_template('error.html', message='請輸入電子郵件和密碼')
+    return """<h1>使用者登入</h1>
+    <form method="post">
+        帳號：<input name="username"><br>
+        密碼：<input name="password" type="password"><br>
+        <input type="submit" value="登入">
+    </form>"""
 
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT * FROM members WHERE email=? AND password=?", (email, password))
-        user = cursor.fetchone()
-        if user:
-            username = user[1]
-            iid = user[0]
-            return render_template('welcome.html', username=add_stars(username), iid=iid)
-        else:
-            return render_template('error.html', message='電子郵件或密碼錯誤')
-    return render_template('login.html')
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect('/')
 
-@app.route('/edit_profile/<int:iid>', methods=['GET', 'POST'])
-def edit_profile(iid):
-    db = get_db()
-    cursor = db.cursor()
+@app.route('/admin')
+def admin():
+    if session.get('user') != 'admin':
+        return "<h1>🚫 未授權</h1><a href='/'>回首頁</a>"
 
-    if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
-        phone = request.form.get('phone')
-        birthdate = request.form.get('birthdate')
+    html = "<h1>🎛️ 管理者後台</h1><ul>"
+    for event, zones in tickets.items():
+        html += "<li><strong>" + event + "</strong><ul>"
+        for zone, (count, price) in zones.items():
+            html += "<li>" + zone + "：剩 " + str(count) + " 張，票價 " + str(price) + " 元</li>"
+        html += "</ul></li>"
+    html += "</ul><a href='/'>回首頁</a>"
+    return html
 
-        if not email or not password:
-            return render_template('error.html', message='請輸入電子郵件和密碼')
-
-        cursor.execute("SELECT * FROM members WHERE email=? AND iid != ?", (email, iid))
-        if cursor.fetchone():
-            return render_template('error.html', message='電子郵件已被使用')
-
-        cursor.execute("UPDATE members SET email=?, password=?, phone=?, birthdate=? WHERE iid=?",
-                       (email, password, phone, birthdate, iid))
-        db.commit()
-        cursor.execute("SELECT username FROM members WHERE iid=?", (iid,))
-        username = cursor.fetchone()[0]
-        return render_template('welcome.html', username=add_stars(username), iid=iid)
-
-    cursor.execute("SELECT * FROM members WHERE iid=?", (iid,))
-    user = cursor.fetchone()
-    if not user:
-        return render_template('error.html', message='使用者不存在')
-
-    user_data = {
-        'iid': user[0],
-        'username': user[1],
-        'email': user[2],
-        'password': user[3],
-        'phone': user[4],
-        'birthdate': user[5]
-    }
-    return render_template('edit_profile.html', user=user_data)
-
-@app.route('/delete/<int:iid>')
-def delete_user(iid):
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("DELETE FROM members WHERE iid=?", (iid,))
-    db.commit()
-    return redirect(url_for('index'))
-
-@app.route('/welcome/<int:iid>')
-def welcome_back(iid):
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT username FROM members WHERE iid=?", (iid,))
-    user = cursor.fetchone()
-    if user:
-        return render_template('welcome.html', username=add_stars(user[0]), iid=iid)
-    else:
-        return render_template('error.html', message='使用者不存在')
-
-@app.template_filter('add_stars')
-def add_stars(username):
-    return f"★{username}★"
-
-if _name_ == '_main_':
-    init_db()
+if __name__ == '__main__':
     app.run(debug=True)
